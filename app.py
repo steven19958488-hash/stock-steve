@@ -37,7 +37,7 @@ def get_stock_data_v3(stock_code):
     except Exception: return pd.DataFrame(), ""
 
 # ==========================================
-# 2. 籌碼面抓取 (三大法人)
+# 2. 籌碼面抓取 (修復版：強化偽裝)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_institutional_data(stock_code):
@@ -45,22 +45,35 @@ def get_institutional_data(stock_code):
     data = []
     suffixes = [".TW", ".TWO"]
     
+    # 使用完整的 User-Agent 偽裝成真實瀏覽器
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://tw.stock.yahoo.com/',
+        'Accept': 'application/json, text/plain, */*'
+    }
+    
     for suffix in suffixes:
         try:
+            # Yahoo 股市 API 接口
             url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.institutionalTradingList;count=30;symbol={stock_code}{suffix}"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=10)
             
             if res.status_code == 200:
                 json_data = res.json()
+                # 檢查是否有資料
                 if 'result' in json_data and json_data['result']:
                     raw_list = json_data['result']
                     for item in raw_list:
+                        # 日期處理
+                        if 'date' not in item: continue
                         ts = int(item['date']) / 1000
                         date_str = pd.Timestamp(ts, unit='s').strftime('%Y-%m-%d')
+                        
+                        # 數據處理 (API 單位是股，除以 1000 換算成張)
                         foreign = int(item.get('foreignNetBuySell', 0)) // 1000
                         trust = int(item.get('investmentTrustNetBuySell', 0)) // 1000
                         dealer = int(item.get('dealerNetBuySell', 0)) // 1000
+                        
                         data.append({
                             "日期": date_str,
                             "外資": foreign,
@@ -68,8 +81,9 @@ def get_institutional_data(stock_code):
                             "自營商": dealer,
                             "合計": foreign + trust + dealer
                         })
-                    if data: break
-        except Exception:
+                    if data: break # 成功抓到就跳出迴圈
+        except Exception as e:
+            print(f"籌碼抓取錯誤: {e}")
             continue
             
     if data:
@@ -96,8 +110,8 @@ def get_stock_name(stock_code):
     if code in stock_map: return stock_map[code]
     try:
         url = f"https://tw.stock.yahoo.com/quote/{code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=3)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             title = soup.title.string
@@ -281,10 +295,8 @@ with col2:
 if not df.empty:
     df = calculate_indicators(df)
     
-    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "💰 籌碼分析"])
 
-    # Tab 1
     with tab1:
         time_period = st.radio("範圍：", ["1個月", "3個月", "半年", "1年"], index=1, horizontal=True)
         if time_period == "1個月": plot_df = df.tail(20)
@@ -324,7 +336,6 @@ if not df.empty:
             st.pyplot(fig)
         except Exception as e: st.error(f"Error: {e}")
 
-    # Tab 2
     with tab2:
         st.subheader("🤖 AI 技術指標診斷")
         signals = analyze_signals(df)
@@ -367,7 +378,6 @@ if not df.empty:
                     st.metric("🛡️ 防守", long_strat['stop_loss'])
                     st.metric("🎯 目標", long_strat['take_profit'])
 
-    # Tab 3
     with tab3:
         st.subheader("📐 黃金分割率")
         u_fib, s_fib, l_fib = calculate_fibonacci_multi(df)
@@ -382,7 +392,7 @@ if not df.empty:
             st.markdown("#### 🐢 長線 (240日)")
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
 
-    # Tab 4
+    # === Tab 4: 籌碼分析 (三大法人) ===
     with tab4:
         st.subheader("💰 三大法人買賣超 (單位：張)")
         df_inst = get_institutional_data(stock_code)
@@ -395,4 +405,6 @@ if not df.empty:
             }).applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['外資','投信','自營商','合計']))
             st.caption("註：數據來源為 Yahoo 股市，僅供參考。紅色買超，綠色賣超。")
         else:
-            st.warning("查無資料，可能是 ETF 或近期無交易數據。")
+            # 如果真的因為 IP 封鎖抓不到，提供一個外部按鈕給使用者
+            st.warning("⚠️ 無法自動抓取籌碼資料 (可能為 ETF 或 IP 限制)。")
+            st.markdown(f"👉 [點此前往 Yahoo 股市查看 {stock_code} 籌碼](https://tw.stock.yahoo.com/quote/{stock_code}/institutional-trading)")
