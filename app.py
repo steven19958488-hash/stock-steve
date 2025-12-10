@@ -5,10 +5,9 @@ import mplfinance as mpf
 import time
 import requests
 from bs4 import BeautifulSoup
-import numpy as np
 
 # ==========================================
-# 1. 資料抓取函數 (v3.1)
+# 1. 資料抓取函數
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_stock_data_v3(stock_code):
@@ -45,7 +44,7 @@ def get_stock_data_v3(stock_code):
         return pd.DataFrame(), ""
 
 # ==========================================
-# 2. 獲取公司名稱 (混合版)
+# 2. 獲取公司名稱
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_stock_name(stock_code):
@@ -72,7 +71,6 @@ def get_stock_name(stock_code):
     if code in stock_map:
         return stock_map[code]
 
-    # 爬取網頁 Title
     try:
         url = f"https://tw.stock.yahoo.com/quote/{code}"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'}
@@ -85,22 +83,21 @@ def get_stock_name(stock_code):
             return title_text
     except Exception:
         pass
-
     return code
 
 # ==========================================
-# 3. 指標計算 (新增 RSI, 布林通道)
+# 3. 指標計算
 # ==========================================
 def calculate_indicators(df):
     df = df.copy()
     try:
-        # --- 均線 ---
+        # MA
         if len(df) >= 5: df['MA5'] = df['close'].rolling(5).mean()
         if len(df) >= 10: df['MA10'] = df['close'].rolling(10).mean()
         if len(df) >= 20: df['MA20'] = df['close'].rolling(20).mean()
         if len(df) >= 60: df['MA60'] = df['close'].rolling(60).mean()
         
-        # --- KD ---
+        # KD
         rsv_min = df['low'].rolling(9).min()
         rsv_max = df['high'].rolling(9).max()
         rsv_den = rsv_max - rsv_min
@@ -109,21 +106,21 @@ def calculate_indicators(df):
         df['K'] = df['RSV'].ewm(com=2).mean()
         df['D'] = df['K'].ewm(com=2).mean()
 
-        # --- MACD ---
+        # MACD
         exp12 = df['close'].ewm(span=12, adjust=False).mean()
         exp26 = df['close'].ewm(span=26, adjust=False).mean()
         df['MACD'] = exp12 - exp26
         df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
         df['Hist'] = df['MACD'] - df['Signal']
 
-        # --- 新增：RSI (14日) ---
+        # RSI
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # --- 新增：布林通道 (20日, 2倍標準差) ---
+        # 布林通道
         df['BB_Mid'] = df['close'].rolling(window=20).mean()
         df['BB_Std'] = df['close'].rolling(window=20).std()
         df['BB_Up'] = df['BB_Mid'] + 2 * df['BB_Std']
@@ -133,7 +130,7 @@ def calculate_indicators(df):
     return df
 
 # ==========================================
-# 4. 訊號分析 (大幅增強)
+# 4. 訊號與策略分析 (新增操作建議)
 # ==========================================
 def analyze_signals(df):
     if len(df) < 2: return ["資料不足"]
@@ -142,71 +139,102 @@ def analyze_signals(df):
     prev = df.iloc[-2]
     signals = []
 
-    # 1. 均線排列與交叉
+    # --- 1. 現有訊號 ---
+    # MA
     if 'MA5' in df.columns and 'MA20' in df.columns:
-        # 均線排列
-        if last['MA5'] > last['MA20'] > last['MA60']: 
-            signals.append("🔥 **趨勢**：多頭排列 (短中長期均線向上)。")
-        elif last['MA5'] < last['MA20'] < last['MA60']: 
-            signals.append("❄️ **趨勢**：空頭排列 (短中長期均線向下)。")
+        if last['MA5'] > last['MA20'] > last['MA60']: signals.append("🔥 **趨勢**：多頭排列")
+        elif last['MA5'] < last['MA20'] < last['MA60']: signals.append("❄️ **趨勢**：空頭排列")
         
-        # 均線黃金交叉 (5日穿過20日)
         if prev['MA5'] < prev['MA20'] and last['MA5'] > last['MA20']:
-            signals.append("✨ **均線黃金交叉**：5日線向上突破月線，短線轉強。")
-        # 均線死亡交叉
+            signals.append("✨ **均線金叉**：5日線穿過月線")
         elif prev['MA5'] > prev['MA20'] and last['MA5'] < last['MA20']:
-            signals.append("💀 **均線死亡交叉**：5日線跌破月線，短線轉弱。")
+            signals.append("💀 **均線死叉**：5日線跌破月線")
 
-    # 2. KD指標
+    # KD
     if 'K' in df.columns and 'D' in df.columns:
         if last['K'] > last['D'] and prev['K'] < prev['D']:
-            val = f"(K={last['K']:.1f})"
-            if last['K'] < 30:
-                signals.append(f"📈 **KD低檔黃金交叉** {val}：強烈反彈訊號。")
-            else:
-                signals.append(f"📈 **KD黃金交叉** {val}：短線買進訊號。")
+            note = "低檔" if last['K'] < 30 else ""
+            signals.append(f"📈 **KD{note}金叉** (K={last['K']:.1f})")
         elif last['K'] < last['D'] and prev['K'] > prev['D']:
-            val = f"(K={last['K']:.1f})"
-            if last['K'] > 80:
-                signals.append(f"📉 **KD高檔死亡交叉** {val}：過熱修正訊號，留意回檔。")
-            else:
-                signals.append(f"📉 **KD死亡交叉** {val}：短線賣出訊號。")
+            note = "高檔" if last['K'] > 80 else ""
+            signals.append(f"📉 **KD{note}死叉** (K={last['K']:.1f})")
 
-    # 3. MACD指標
+    # MACD
     if 'Hist' in df.columns:
-        if last['Hist'] > 0 and prev['Hist'] < 0:
-            signals.append("🟢 **MACD 翻紅**：空轉多，買方力道增強。")
-        elif last['Hist'] < 0 and prev['Hist'] > 0:
-            signals.append("🔴 **MACD 翻綠**：多轉空，賣方力道增強。")
+        if last['Hist'] > 0 and prev['Hist'] < 0: signals.append("🟢 **MACD翻紅**")
+        elif last['Hist'] < 0 and prev['Hist'] > 0: signals.append("🔴 **MACD翻綠**")
 
-    # 4. RSI 指標 (新增)
-    if 'RSI' in df.columns and not pd.isna(last['RSI']):
-        rsi_val = last['RSI']
-        if rsi_val > 70:
-            signals.append(f"⚠️ **RSI 過熱 ({rsi_val:.1f})**：短線可能過熱，隨時準備回檔。")
-        elif rsi_val < 30:
-            signals.append(f"💎 **RSI 超賣 ({rsi_val:.1f})**：股價可能超跌，有機會反彈。")
+    # RSI
+    if 'RSI' in df.columns:
+        if last['RSI'] > 75: signals.append(f"⚠️ **RSI過熱** ({last['RSI']:.1f})")
+        elif last['RSI'] < 25: signals.append(f"💎 **RSI超賣** ({last['RSI']:.1f})")
 
-    # 5. 布林通道 (新增)
-    if 'BB_Up' in df.columns:
-        if last['close'] > last['BB_Up']:
-            signals.append("🚀 **突破布林上軌**：股價極強勢，但也可能面臨拉回。")
-        elif last['close'] < last['BB_Low']:
-            signals.append("🌊 **跌破布林下軌**：股價極弱勢，但也可能出現乖離過大反彈。")
+    return signals if signals else ["⚖️ 盤整中"]
 
-    # 6. K線型態 (新增：判斷當日紅黑棒)
-    open_p = last['open']
-    close_p = last['close']
-    pct_change = (close_p - open_p) / open_p * 100
+def generate_strategy(df):
+    """
+    生成具體的操作建議
+    """
+    if len(df) < 60: return None
     
-    if pct_change > 3:
-        signals.append("🐂 **長紅K棒**：今日大漲超過 3%，買盤強勁。")
-    elif pct_change < -3:
-        signals.append("🐻 **長黑K棒**：今日大跌超過 3%，賣壓沉重。")
-    elif abs(pct_change) < 0.2:
-        signals.append("⚖️ **十字線/變盤線**：多空力道均衡，關注明日方向。")
+    last_close = df.iloc[-1]['close']
+    last = df.iloc[-1]
+    
+    # 計算支撐與壓力
+    # 停損參考：季線 (MA60) 或 前波低點 (60日低)
+    support_ma60 = last['MA60'] if 'MA60' in df.columns else 0
+    support_low = df['low'].tail(60).min()
+    stop_loss_price = max(support_ma60, support_low) # 取比較靠近現在價格的那個
+    
+    # 停利參考：前波高點 (60日高) 或 布林上軌
+    resist_high = df['high'].tail(60).max()
+    resist_bb = last['BB_Up'] if 'BB_Up' in df.columns else resist_high
+    take_profit_price = min(resist_high, resist_bb) # 保守一點，取比較低的那個壓力
+    
+    # 如果現在價格已經創新高，壓力就設為布林上軌 * 1.05
+    if last_close >= resist_high:
+        take_profit_price = last_close * 1.05
 
-    return signals if signals else ["⚖️ 目前盤勢震盪，無明顯單一訊號。"]
+    # 判斷策略方向
+    strategy = {
+        "action": "觀望",
+        "reason": "多空不明，建議場外觀望",
+        "entry_price": "不建議進場",
+        "stop_loss": f"{stop_loss_price:.2f}",
+        "take_profit": f"{take_profit_price:.2f}"
+    }
+
+    # === 多頭策略 ===
+    # 條件：收盤在月線之上 且 月線向上
+    ma20_up = df['MA20'].iloc[-1] > df['MA20'].iloc[-5] if 'MA20' in df.columns else False
+    
+    if last_close > last['MA20'] and ma20_up:
+        strategy["action"] = "偏多操作 (Bullish)"
+        strategy["reason"] = "股價站上月線且月線翻揚，趨勢偏多"
+        strategy["entry_price"] = f"拉回測試 {last['MA20']:.2f} (月線) 不破可佈局"
+        strategy["stop_loss"] = f"{stop_loss_price:.2f} (跌破季線或前低)"
+        
+        # 如果乖離過大 (收盤價 > 月線 10%)
+        if last_close > last['MA20'] * 1.1:
+            strategy["action"] = "勿追高 (Wait)"
+            strategy["reason"] = "短線乖離過大，隨時可能回檔"
+            strategy["entry_price"] = f"等回測 {last['MA5']:.2f} (5日線) 再觀察"
+
+    # === 空頭策略 ===
+    elif last_close < last['MA20']:
+        strategy["action"] = "保守/空手 (Bearish)"
+        strategy["reason"] = "股價位於月線之下，中期趨勢偏弱"
+        strategy["entry_price"] = "暫不建議接刀，待站回月線"
+        strategy["take_profit"] = f"{last['MA20']:.2f} (月線反壓)"
+        
+        # 如果 RSI 超賣
+        if 'RSI' in df.columns and last['RSI'] < 25:
+            strategy["action"] = "搶反彈 (Rebound)"
+            strategy["reason"] = "RSI嚴重超賣，可能有技術性反彈"
+            strategy["entry_price"] = "現價輕倉嘗試"
+            strategy["stop_loss"] = f"{last_close * 0.95:.2f} (設 5% 停損)"
+
+    return strategy
 
 # ==========================================
 # 5. 黃金分割
@@ -255,40 +283,31 @@ if not df.empty:
     with tab1:
         c1, c2 = st.columns(2)
         with c1: mas = st.multiselect("均線", ["MA5","MA10","MA20","MA60"], ["MA5","MA20","MA60"])
-        with c2: inds = st.multiselect("副圖", ["Volume","KD","MACD","RSI"], ["Volume","KD"]) # 新增 RSI 選項
+        with c2: inds = st.multiselect("副圖", ["Volume","KD","MACD","RSI"], ["Volume","KD"])
 
         add_plots = []
         colors = {'MA5':'orange', 'MA10':'cyan', 'MA20':'purple', 'MA60':'green'}
-        
         for ma in mas:
             if ma in df.columns:
                 add_plots.append(mpf.make_addplot(df[ma], panel=0, color=colors[ma], width=1.0))
-
-        # 布林通道 (如果使用者想看，也可以加，這裡先預設不畫以免太亂，重點在訊號文字)
         
         pid = 0
         vol = False
         if "Volume" in inds: pid+=1; vol=True
-        
         if "KD" in inds and 'K' in df.columns:
             pid+=1
             add_plots.append(mpf.make_addplot(df['K'], panel=pid, color='orange'))
             add_plots.append(mpf.make_addplot(df['D'], panel=pid, color='blue'))
-            
         if "MACD" in inds and 'MACD' in df.columns:
             pid+=1
             add_plots.append(mpf.make_addplot(df['MACD'], panel=pid, color='red'))
             add_plots.append(mpf.make_addplot(df['Signal'], panel=pid, color='blue'))
             add_plots.append(mpf.make_addplot(df['Hist'], type='bar', panel=pid, color='gray', alpha=0.5))
-
         if "RSI" in inds and 'RSI' in df.columns:
             pid+=1
-            add_plots.append(mpf.make_addplot(df['RSI'], panel=pid, color='#9b59b6', title='RSI'))
-            # 畫出 70/30 參考線
-            line_70 = [70] * len(df)
-            line_30 = [30] * len(df)
-            add_plots.append(mpf.make_addplot(line_70, panel=pid, color='gray', linestyle='dashed', width=0.8))
-            add_plots.append(mpf.make_addplot(line_30, panel=pid, color='gray', linestyle='dashed', width=0.8))
+            add_plots.append(mpf.make_addplot(df['RSI'], panel=pid, color='#9b59b6'))
+            add_plots.append(mpf.make_addplot([70]*len(df), panel=pid, color='gray', linestyle='dashed'))
+            add_plots.append(mpf.make_addplot([30]*len(df), panel=pid, color='gray', linestyle='dashed'))
 
         try:
             fig, ax = mpf.plot(
@@ -303,19 +322,39 @@ if not df.empty:
 
     with tab2:
         st.subheader("🤖 AI 技術指標診斷")
+        
+        # 1. 顯示訊號
+        col_sig1, col_sig2 = st.columns(2)
         signals = analyze_signals(df)
-        
-        # 使用不同顏色區塊來顯示訊號
-        for s in signals:
-            if "多" in s or "黃金" in s or "紅" in s or "強" in s or "買" in s:
-                st.success(s) # 綠色/好消息
-            elif "空" in s or "死亡" in s or "綠" in s or "弱" in s or "賣" in s:
-                st.error(s)   # 紅色/壞消息
-            else:
-                st.info(s)    # 藍色/中性消息
-        
+        mid = len(signals)//2 + 1
+        with col_sig1:
+            for s in signals[:mid]: st.info(s)
+        with col_sig2:
+            for s in signals[mid:]: st.info(s)
+
         st.divider()
-        st.caption("說明：RSI > 70 為超買，< 30 為超賣。KD 黃金交叉代表短線轉強。")
+        
+        # 2. 顯示操作建議
+        st.subheader("🎯 AI 操盤室 (僅供參考)")
+        strategy = generate_strategy(df)
+        
+        if strategy:
+            # 判斷顏色
+            color = "off"
+            if "偏多" in strategy['action']: color = "normal" # 綠色/正常
+            elif "保守" in strategy['action']: color = "off"   # 灰色
+            
+            # 使用 Metric 顯示關鍵價位
+            m1, m2, m3 = st.columns(3)
+            m1.metric("建議方向", strategy['action'], strategy['reason'], delta_color=color)
+            m2.metric("停損參考 (Stop Loss)", strategy['stop_loss'], "跌破出場", delta_color="inverse")
+            m3.metric("停利參考 (Take Profit)", strategy['take_profit'], "壓力位置")
+            
+            st.markdown(f"""
+            > **💡 進場策略**：{strategy['entry_price']}
+            """)
+        else:
+            st.warning("資料不足，無法計算策略")
 
     with tab3:
         st.subheader("黃金分割")
