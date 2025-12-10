@@ -7,6 +7,7 @@ import requests
 import random
 from bs4 import BeautifulSoup
 import numpy as np
+from FinMind.data import DataLoader # 引入新工具
 
 # ==========================================
 # 1. 資料抓取函數 (技術面)
@@ -38,57 +39,65 @@ def get_stock_data_v3(stock_code):
     except Exception: return pd.DataFrame(), ""
 
 # ==========================================
-# 2. 籌碼面抓取 (穩健防禦版)
+# 2. 籌碼面抓取 (改用 FinMind API - 最穩定)
 # ==========================================
-# 移除 cache，讓使用者可以手動重試
+@st.cache_data(ttl=3600)
 def get_institutional_data(stock_code):
     stock_code = str(stock_code).strip()
-    data = []
-    suffixes = [".TW", ".TWO"]
     
-    # 隨機延遲，模擬真人行為
-    time.sleep(random.uniform(0.5, 1.5))
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://tw.stock.yahoo.com/',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-    }
-    
-    for suffix in suffixes:
-        try:
-            url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.institutionalTradingList;count=30;symbol={stock_code}{suffix}"
-            res = requests.get(url, headers=headers, timeout=10)
-            
-            if res.status_code == 200:
-                json_data = res.json()
-                if 'result' in json_data and json_data['result']:
-                    raw_list = json_data['result']
-                    for item in raw_list:
-                        if 'date' not in item: continue
-                        ts = int(item['date']) / 1000
-                        date_str = pd.Timestamp(ts, unit='s').strftime('%Y-%m-%d')
-                        
-                        foreign = int(item.get('foreignNetBuySell', 0)) // 1000
-                        trust = int(item.get('investmentTrustNetBuySell', 0)) // 1000
-                        dealer = int(item.get('dealerNetBuySell', 0)) // 1000
-                        
-                        data.append({
-                            "日期": date_str,
-                            "外資": foreign,
-                            "投信": trust,
-                            "自營商": dealer,
-                            "合計": foreign + trust + dealer
-                        })
-                    if data: break
-        except Exception:
-            continue
-            
-    if data:
-        df_inst = pd.DataFrame(data)
-        df_inst = df_inst.sort_values("日期", ascending=True)
-        return df_inst
-    return pd.DataFrame()
+    try:
+        # 初始化 FinMind 下載器
+        dl = DataLoader()
+        
+        # 設定開始日期 (抓最近 60 天，確保有資料)
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
+        
+        # 下載三大法人數據
+        df = dl.taiwan_stock_institutional_investors(
+            stock_id=stock_code,
+            start_date=start_date
+        )
+        
+        if df.empty:
+            return pd.DataFrame()
+
+        # 資料整理：FinMind 的格式是 [date, buy, sell, name]
+        # 我們要算出「買賣超 (diff)」並轉換成「張數 (股數/1000)」
+        df['diff'] = (df['buy'] - df['sell']) / 1000
+        
+        # 篩選我們需要的法人名稱，並統一命名
+        # FinMind 名稱對照：
+        # Foreign_Investor = 外資
+        # Investment_Trust = 投信
+        # Dealer_Self = 自營商(自行買賣)
+        # Dealer_Hedging = 自營商(避險) -> 我們通常把這兩個加總算成「自營商」
+        
+        # 1. 建立樞紐分析表 (Pivot)，把法人名稱轉成欄位
+        pivot_df = df.pivot_table(index='date', columns='name', values='diff', aggfunc='sum').fillna(0)
+        
+        # 2. 整理欄位
+        final_df = pd.DataFrame(index=pivot_df.index)
+        
+        # 外資
+        final_df['外資'] = pivot_df.get('Foreign_Investor', 0)
+        # 投信
+        final_df['投信'] = pivot_df.get('Investment_Trust', 0)
+        # 自營商 (自行 + 避險)
+        final_df['自營商'] = pivot_df.get('Dealer_Self', 0) + pivot_df.get('Dealer_Hedging', 0)
+        
+        # 合計
+        final_df['合計'] = final_df['外資'] + final_df['投信'] + final_df['自營商']
+        
+        # 整理日期索引
+        final_df.index = pd.to_datetime(final_df.index)
+        final_df.index.name = '日期'
+        
+        # 取最近 30 筆顯示
+        return final_df.tail(30).reset_index()
+
+    except Exception as e:
+        print(f"FinMind Error: {e}")
+        return pd.DataFrame()
 
 # ==========================================
 # 3. 獲取公司名稱
@@ -108,8 +117,8 @@ def get_stock_name(stock_code):
     if code in stock_map: return stock_map[code]
     try:
         url = f"https://tw.stock.yahoo.com/quote/{code}"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=3)
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        res = requests.get(url, headers=headers, timeout=5)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             title = soup.title.string
@@ -394,32 +403,33 @@ if not df.empty:
             st.markdown("#### 🐢 長線 (240日)")
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
 
-    # Tab 4
+    # Tab 4: 籌碼分析 (FinMind 版)
     with tab4:
-        st.subheader("💰 三大法人買賣超")
+        st.subheader("💰 三大法人買賣超 (單位：張)")
         
-        # 使用 Session State 來控制重試按鈕
-        if 'retry_chip' not in st.session_state:
-            st.session_state.retry_chip = False
-            
-        # 抓取資料
+        # 使用 FinMind 抓取
         df_inst = get_institutional_data(stock_code)
         
         if not df_inst.empty:
+            # 1. 為了畫圖，日期設為 index
             chart_data = df_inst.set_index("日期")[["外資", "投信", "自營商"]]
-            st.bar_chart(chart_data)
-            st.dataframe(df_inst.style.format({
-                "外資": "{:,.0f}", "投信": "{:,.0f}", "自營商": "{:,.0f}", "合計": "{:,.0f}"
-            }).applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['外資','投信','自營商','合計']))
-            st.caption("註：數據來源為 Yahoo 股市，僅供參考。")
-        else:
-            # 沒抓到資料時顯示友善介面
-            st.warning("⚠️ 暫時無法抓取籌碼資料 (IP 限制或無資料)")
             
-            c_retry, c_link = st.columns(2)
-            with c_retry:
-                if st.button("🔄 重試連線"):
-                    st.rerun() # 重新執行
-            with c_link:
-                url = f"https://tw.stock.yahoo.com/quote/{stock_code}/institutional-trading"
-                st.link_button("👉 前往 Yahoo 股市查看", url)
+            # 2. 顯示柱狀圖
+            st.bar_chart(chart_data)
+            
+            # 3. 顯示詳細表格 (日期由近到遠排序比較好閱讀，所以反轉一下)
+            display_df = df_inst.sort_values("日期", ascending=False)
+            
+            # 格式化日期欄位，只顯示 YYYY-MM-DD
+            display_df['日期'] = display_df['日期'].dt.strftime('%Y-%m-%d')
+            
+            st.dataframe(display_df.style.format({
+                "外資": "{:,.0f}", 
+                "投信": "{:,.0f}", 
+                "自營商": "{:,.0f}",
+                "合計": "{:,.0f}"
+            }).applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['外資','投信','自營商','合計']))
+            
+            st.caption("資料來源：FinMind (證交所數據)，紅=買超，綠=賣超。")
+        else:
+            st.warning("查無籌碼資料，可能為 ETF 或資料源連線逾時。")
