@@ -21,7 +21,7 @@ def get_stock_data_v3(stock_code):
         try:
             ticker = f"{stock_code}{suffix}"
             stock = yf.Ticker(ticker)
-            # 為了確保指標(MA60)準確，我們還是抓比較長的資料(1.5年)，但畫圖時再切分
+            # 抓取 500 天資料以確保指標計算準確
             temp_df = stock.history(period="500d", auto_adjust=False)
             
             if not temp_df.empty:
@@ -248,8 +248,7 @@ if not df.empty:
     tab1, tab2, tab3 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割"])
 
     with tab1:
-        # === 1. 時間範圍選擇按鈕 ===
-        # 預設選 "3個月" (台股波段最適合)
+        # 時間範圍選擇
         time_period = st.radio(
             "選擇時間範圍：",
             ["1個月", "3個月", "半年", "1年"],
@@ -257,16 +256,15 @@ if not df.empty:
             horizontal=True
         )
 
-        # === 2. 根據選擇切分資料 (Slicing) ===
-        # 注意：我們是在「算完」指標後才切分，這樣季線(MA60)才不會因為資料不足而消失
+        # 切分資料
         if time_period == "1個月":
-            plot_df = df.tail(20) # 約20個交易日
+            plot_df = df.tail(20)
         elif time_period == "3個月":
-            plot_df = df.tail(60) # 約60個交易日
+            plot_df = df.tail(60)
         elif time_period == "半年":
             plot_df = df.tail(120)
         else:
-            plot_df = df.tail(240) # 1年
+            plot_df = df.tail(240)
 
         c1, c2 = st.columns(2)
         with c1: mas = st.multiselect("均線", ["MA5","MA10","MA20","MA60"], ["MA5","MA20","MA60"])
@@ -275,7 +273,6 @@ if not df.empty:
         add_plots = []
         colors = {'MA5':'orange', 'MA10':'cyan', 'MA20':'purple', 'MA60':'green'}
         
-        # 畫均線 (用切分後的 plot_df)
         for ma in mas:
             if ma in plot_df.columns:
                 add_plots.append(mpf.make_addplot(plot_df[ma], panel=0, color=colors[ma], width=1.0))
@@ -299,13 +296,13 @@ if not df.empty:
             add_plots.append(mpf.make_addplot([30]*len(plot_df), panel=pid, color='gray', linestyle='dashed'))
 
         try:
-            # 畫圖
+            # === 修改重點：移除 title 參數 ===
             fig, ax = mpf.plot(
-                plot_df, # 這裡傳入切分後的資料
+                plot_df, 
                 type='candle', style='yahoo', volume=vol, 
                 addplot=add_plots, returnfig=True,
                 panel_ratios=tuple([2]+[1]*pid), figsize=(10, 8),
-                title=f"Stock Code: {stock_code} ({time_period})",
+                # title=...  (這一行已經被刪除)
                 warn_too_much_data=10000
             )
             st.pyplot(fig)
@@ -313,7 +310,7 @@ if not df.empty:
 
     with tab2:
         st.subheader("🤖 AI 技術指標診斷")
-        signals = analyze_signals(df) # 訊號分析依然使用完整資料，確保準確度
+        signals = analyze_signals(df)
         col_s1, col_s2 = st.columns(2)
         mid = (len(signals) + 1) // 2
         with col_s1:
