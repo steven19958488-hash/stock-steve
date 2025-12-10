@@ -4,7 +4,6 @@ import pandas as pd
 import mplfinance as mpf
 import time
 import requests
-import random
 from bs4 import BeautifulSoup
 import numpy as np
 
@@ -38,41 +37,30 @@ def get_stock_data_v3(stock_code):
     except Exception: return pd.DataFrame(), ""
 
 # ==========================================
-# 2. 籌碼面抓取 (穩健防禦版)
+# 2. 籌碼面抓取 (三大法人)
 # ==========================================
-# 移除 cache，讓使用者可以手動重試
+@st.cache_data(ttl=3600)
 def get_institutional_data(stock_code):
     stock_code = str(stock_code).strip()
     data = []
     suffixes = [".TW", ".TWO"]
     
-    # 隨機延遲，模擬真人行為
-    time.sleep(random.uniform(0.5, 1.5))
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://tw.stock.yahoo.com/',
-        'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-    }
-    
     for suffix in suffixes:
         try:
             url = f"https://tw.stock.yahoo.com/_td-stock/api/resource/StockServices.institutionalTradingList;count=30;symbol={stock_code}{suffix}"
-            res = requests.get(url, headers=headers, timeout=10)
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            res = requests.get(url, headers=headers, timeout=5)
             
             if res.status_code == 200:
                 json_data = res.json()
                 if 'result' in json_data and json_data['result']:
                     raw_list = json_data['result']
                     for item in raw_list:
-                        if 'date' not in item: continue
                         ts = int(item['date']) / 1000
                         date_str = pd.Timestamp(ts, unit='s').strftime('%Y-%m-%d')
-                        
                         foreign = int(item.get('foreignNetBuySell', 0)) // 1000
                         trust = int(item.get('investmentTrustNetBuySell', 0)) // 1000
                         dealer = int(item.get('dealerNetBuySell', 0)) // 1000
-                        
                         data.append({
                             "日期": date_str,
                             "外資": foreign,
@@ -396,13 +384,7 @@ if not df.empty:
 
     # Tab 4
     with tab4:
-        st.subheader("💰 三大法人買賣超")
-        
-        # 使用 Session State 來控制重試按鈕
-        if 'retry_chip' not in st.session_state:
-            st.session_state.retry_chip = False
-            
-        # 抓取資料
+        st.subheader("💰 三大法人買賣超 (單位：張)")
         df_inst = get_institutional_data(stock_code)
         
         if not df_inst.empty:
@@ -411,15 +393,6 @@ if not df.empty:
             st.dataframe(df_inst.style.format({
                 "外資": "{:,.0f}", "投信": "{:,.0f}", "自營商": "{:,.0f}", "合計": "{:,.0f}"
             }).applymap(lambda x: 'color: red' if x > 0 else 'color: green', subset=['外資','投信','自營商','合計']))
-            st.caption("註：數據來源為 Yahoo 股市，僅供參考。")
+            st.caption("註：數據來源為 Yahoo 股市，僅供參考。紅色買超，綠色賣超。")
         else:
-            # 沒抓到資料時顯示友善介面
-            st.warning("⚠️ 暫時無法抓取籌碼資料 (IP 限制或無資料)")
-            
-            c_retry, c_link = st.columns(2)
-            with c_retry:
-                if st.button("🔄 重試連線"):
-                    st.rerun() # 重新執行
-            with c_link:
-                url = f"https://tw.stock.yahoo.com/quote/{stock_code}/institutional-trading"
-                st.link_button("👉 前往 Yahoo 股市查看", url)
+            st.warning("查無資料，可能是 ETF 或近期無交易數據。")
