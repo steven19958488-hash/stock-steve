@@ -272,9 +272,9 @@ def generate_dual_strategy(df):
     return short_term, long_term
 
 # ==========================================
-# 5. 黃金分割 (雙模式版)
+# 5. 黃金分割 (三週期版)
 # ==========================================
-def calculate_fibonacci_dual(df):
+def calculate_fibonacci_multi(df):
     
     def get_levels(window_days):
         if len(df) < window_days: return {}
@@ -290,12 +290,14 @@ def calculate_fibonacci_dual(df):
             '1.0 (區間高)': high
         }
     
+    # 極短線: 近一個月 (20天)
+    ultra_fib = get_levels(20)
     # 短線: 近一季 (60天)
     short_fib = get_levels(60)
     # 長線: 近一年 (240天)
     long_fib = get_levels(240)
     
-    return short_fib, long_fib
+    return ultra_fib, short_fib, long_fib
 
 # ==========================================
 # 6. 主程式介面
@@ -416,23 +418,25 @@ if not df.empty:
         st.subheader("📐 黃金分割率 (支撐/壓力)")
         st.write("透過費波南希數列，計算出股價回檔或反彈的關鍵位置。")
         
-        # 呼叫新的雙模式函數
-        short_fib, long_fib = calculate_fibonacci_dual(df)
+        # 呼叫三週期函數
+        ultra_fib, short_fib, long_fib = calculate_fibonacci_multi(df)
         
-        col_f1, col_f2 = st.columns(2)
+        col_f1, col_f2, col_f3 = st.columns(3)
         
         with col_f1:
-            st.markdown("#### ⚡ 短線 (近60日)")
-            if short_fib:
-                fib_df1 = pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in short_fib.items()])
-                st.table(fib_df1)
-                st.info(f"觀察重點：短線回檔不破 **{short_fib['0.382']:.2f}** 為強勢整理。")
-            else:
-                st.warning("資料不足")
+            st.markdown("#### ⚡ 極短線 (20日)")
+            if ultra_fib:
+                st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in ultra_fib.items()]))
+            else: st.warning("資料不足")
 
         with col_f2:
-            st.markdown("#### 🐢 長線 (近240日)")
+            st.markdown("#### 🌊 短線 (60日)")
+            if short_fib:
+                st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in short_fib.items()]))
+            else: st.warning("資料不足")
+
+        with col_f3:
+            st.markdown("#### 🐢 長線 (240日)")
             if long_fib:
-                fib_df2 = pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in long_fib.items()])
-                st.table(fib_df2)
-                st.info(f"觀察重點：長線大支撐在 **{long_fib['0.5 (中關)']:.2f}**，跌破則轉空。")
+                st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in long_fib.items()]))
+            else: st.warning("資料不足")
