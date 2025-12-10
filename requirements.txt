@@ -4,4 +4,3 @@ yfinance
 mplfinance
 requests
 beautifulsoup4
-FinMind
