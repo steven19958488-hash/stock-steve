@@ -6,7 +6,6 @@ import time
 import requests
 from bs4 import BeautifulSoup
 import numpy as np
-# FinMind 相關的 import 已移除
 
 # ==========================================
 # 1. 資料抓取函數 (技術面)
@@ -38,7 +37,63 @@ def get_stock_data_v3(stock_code):
     except Exception: return pd.DataFrame(), ""
 
 # ==========================================
-# 2. 獲取公司名稱 (穩定版)
+# 2. 籌碼面抓取 (修正：改用 Goodinfo - 爬蟲版)
+# ==========================================
+@st.cache_data(ttl=3600)
+def get_institutional_data(stock_code):
+    stock_code = str(stock_code).strip()
+    
+    # Goodinfo 的籌碼數據頁面
+    url = f"https://goodinfo.tw/tw/ShowBuySaleChart.asp?STOCK_ID={stock_code}&CHT_CAT=DATE"
+    
+    # 偽裝 Headers (必須有 Referer 避免被 Goodinfo 阻擋)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://goodinfo.tw/tw/StockList.asp',
+    }
+    
+    try:
+        # 使用 read_html 嘗試讀取網頁中的表格
+        dfs = pd.read_html(url, header=0, encoding='utf-8', flavor='html5lib', attrs={'class': 'table-inner'})
+        
+        # 找到包含三大法人的表格 (通常會有很多表格，我們找包含 '外資買賣超' 的)
+        df_target = pd.DataFrame()
+        
+        for df_temp in dfs:
+            # 檢查是否有我們需要的欄位
+            if '外資買賣超' in df_temp.columns and '投信買賣超' in df_temp.columns:
+                df_target = df_temp
+                break
+        
+        if df_target.empty:
+            return pd.DataFrame()
+
+        # 重新整理 DataFrame
+        df_inst = df_target.rename(columns={'日期': '日期', 
+                                           '外資買賣超': '外資',
+                                           '投信買賣超': '投信',
+                                           '自營商買賣超': '自營商'})
+        
+        # 只保留需要的欄位 (單位：張)
+        df_inst = df_inst[['日期', '外資', '投信', '自營商']]
+        
+        # 計算合計
+        df_inst['合計'] = df_inst['外資'] + df_inst['投信'] + df_inst['自營商']
+        
+        # 整理日期並反轉順序 (確保圖表由舊到新)
+        df_inst['日期'] = pd.to_datetime(df_inst['日期'], errors='coerce')
+        df_inst = df_inst.dropna(subset=['日期'])
+        df_inst = df_inst.sort_values('日期', ascending=True)
+        
+        return df_inst.reset_index(drop=True)
+
+    except Exception as e:
+        # 如果爬蟲失敗，可能是 IP 限制或網頁結構改變
+        print(f"Goodinfo爬蟲失敗: {e}")
+        return pd.DataFrame()
+
+# ==========================================
+# 3. 獲取公司名稱
 # ==========================================
 @st.cache_data(ttl=86400)
 def get_stock_name(stock_code):
@@ -55,18 +110,19 @@ def get_stock_name(stock_code):
     if code in stock_map: return stock_map[code]
     try:
         url = f"https://tw.stock.yahoo.com/quote/{code}"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        res = requests.get(url, headers=headers, timeout=5)
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=3)
         if res.status_code == 200:
             soup = BeautifulSoup(res.text, 'html.parser')
             title = soup.title.string
             if title and "(" in title: return title.split("(")[0].strip()
             return title
-    except Exception: pass
+    except: pass
     return code
 
+# (以下是原本的指標計算、策略分析、主程式等，保持不變)
 # ==========================================
-# 3. 指標計算
+# 4. 指標計算
 # ==========================================
 def calculate_indicators(df):
     df = df.copy()
@@ -105,7 +161,7 @@ def calculate_indicators(df):
     return df
 
 # ==========================================
-# 4. 策略與分析
+# 5. 策略與分析
 # ==========================================
 def calculate_score(df):
     score = 50 
@@ -221,11 +277,10 @@ col1, col2 = st.columns([1, 2])
 with col1:
     stock_code = st.text_input("輸入代碼", "2330")
 
-# --- 這裡已經將 FinMind 相關的程式碼移除，確保應用程式可以啟動 ---
 try:
     df, valid_ticker = get_stock_data_v3(stock_code)
 except:
-    st.error("系統忙碌中，請稍後再試")
+    st.error("系統忙碌中")
     df = pd.DataFrame()
 
 with col2:
@@ -242,10 +297,8 @@ with col2:
 if not df.empty:
     df = calculate_indicators(df)
     
-    # Tabs
     tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "💰 籌碼分析"])
 
-    # Tab 1
     with tab1:
         time_period = st.radio("範圍：", ["1個月", "3個月", "半年", "1年"], index=1, horizontal=True)
         if time_period == "1個月": plot_df = df.tail(20)
@@ -285,7 +338,6 @@ if not df.empty:
             st.pyplot(fig)
         except Exception as e: st.error(f"Error: {e}")
 
-    # Tab 2
     with tab2:
         st.subheader("🤖 AI 技術指標診斷")
         signals = analyze_signals(df)
@@ -342,7 +394,7 @@ if not df.empty:
             st.markdown("#### 🐢 長線 (240日)")
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
 
-    # Tab 4: 籌碼分析 (改為連結導向 - 移除 FinMind 程式碼)
+    # Tab 4: 籌碼分析 (改為連結導向 - 移除不穩定套件)
     with tab4:
         st.subheader("💰 三大法人買賣超")
         st.warning("⚠️ 由於雲端環境安裝第三方金融套件連線不穩定，此功能已改為「外部連結導向」，以確保應用程式可以啟動。")
