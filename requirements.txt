@@ -3,4 +3,3 @@ pandas
 yfinance
 mplfinance
 requests
-beautifulsoup4
