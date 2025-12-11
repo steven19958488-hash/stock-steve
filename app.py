@@ -10,16 +10,11 @@ import numpy as np
 # ==========================================
 # 0. 常用變數/名單 (Market Watchlist)
 # ==========================================
-# 使用短名單避免觸發Yahoo的下載限制
-HOT_STOCKS_LIST = {
-    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2303": "聯電", 
-    "2382": "廣達", "3231": "緯創", "2603": "長榮", "2609": "陽明",
-    "2881": "富邦金", "2882": "國泰金", "0050": "元大台灣50", "0056": "元大高股息"
-}
-# 為了避免超限，我們只下載這 12 檔股票的數據用於推薦。
+# 為了避免 IP 封鎖，這裡不再使用固定的 HOT_STOCKS_LIST，而是嘗試抓取當日高周轉率名單。
+# 如果抓取失敗，則退回一個預設的短名單。
 
 # ==========================================
-# 1. 資料抓取函數
+# 1. 資料抓取函數 (技術面)
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_stock_data_v3(stock_code):
@@ -50,6 +45,7 @@ def get_stock_data_v3(stock_code):
 # ==========================================
 # 2. 獲取公司名稱
 # ==========================================
+# (保持不變，略)
 @st.cache_data(ttl=86400)
 def get_stock_name(stock_code):
     code = str(stock_code).strip()
@@ -76,18 +72,16 @@ def get_stock_name(stock_code):
     return code
 
 # ==========================================
-# 3. 指標計算
+# 3. 指標計算 (略)
 # ==========================================
 def calculate_indicators(df):
     df = df.copy()
     try:
-        # MA
         if len(df) >= 5: df['MA5'] = df['close'].rolling(5).mean()
         if len(df) >= 20: df['MA20'] = df['close'].rolling(20).mean()
         if len(df) >= 60: df['MA60'] = df['close'].rolling(60).mean()
         if len(df) >= 5: df['VolMA5'] = df['volume'].rolling(5).mean()
 
-        # KD & MACD & RSI & BB & BBW
         rsv_min = df['low'].rolling(9).min()
         rsv_max = df['high'].rolling(9).max()
         rsv_den = rsv_max - rsv_min
@@ -111,7 +105,6 @@ def calculate_indicators(df):
         df['BB_Low'] = df['BB_Mid'] - 2 * df['BB_Std']
         df['BBW'] = (df['BB_Up'] - df['BB_Low']) / df['BB_Mid']
         
-        # OBV & ADX
         df['OBV'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
         df['UpMove'] = df['high'] - df['high'].shift(1)
         df['DownMove'] = df['low'].shift(1) - df['low']
@@ -130,13 +123,11 @@ def calculate_indicators(df):
         df['DX'] = (abs(df['+DI'] - df['-DI']) / (df['+DI'] + df['-DI'])) * 100
         df['ADX'] = df['DX'].ewm(span=n, adjust=False).mean()
         
-        # 量能趨勢
         df['Vol_Shift1'] = df['volume'].shift(1)
         df['Vol_Shift2'] = df['volume'].shift(2)
         df['Vol_Inc'] = (df['volume'] > df['Vol_Shift1']) & (df['Vol_Shift1'] > df['Vol_Shift2'])
         df['Vol_Dec'] = (df['volume'] < df['Vol_Shift1']) & (df['Vol_Shift1'] < df['Vol_Shift2'])
         
-        # ATR 波動度
         df['ATR_Avg'] = df['ATR'].tail(20).mean()
 
     except Exception as e:
@@ -144,14 +135,13 @@ def calculate_indicators(df):
     return df
 
 # ==========================================
-# 4. 策略與分析
+# 4. 策略與分析 (略)
 # ==========================================
 def calculate_score(df):
     score = 50 
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
-    # 趨勢分數
     if last['close'] > last['MA20']: score += 10 
     if last['MA20'] > last['MA60']: score += 10
     if last['close'] > last['MA60']: score += 10
@@ -161,25 +151,21 @@ def calculate_score(df):
     if last['close'] < last['MA60']: score -= 10
     if last['MA5'] < last['MA20']: score -= 10
     
-    # 動能分數
     if last['MACD'] > 0: score += 5
     if last['Hist'] > 0: score += 5
     if last['K'] > last['D']: score += 5
     if last['RSI'] > 80: score -= 5 
     if last['RSI'] < 20: score += 5 
     
-    # 量價分數
     vol_ratio = last['volume'] / last['VolMA5'] if 'VolMA5' in df.columns else 1
     if last['close'] > prev['close'] and vol_ratio > 1.2: score += 5 
     if last['close'] < prev['close'] and vol_ratio > 1.2: score -= 5 
     if 'Vol_Inc' in df.columns and last['Vol_Inc'] == True: score += 5
     if 'Vol_Dec' in df.columns and last['Vol_Dec'] == True: score -= 5 
     
-    # ADX 趨勢確認
     adx_filter = last['ADX'] > 25 if 'ADX' in df.columns and not pd.isna(last['ADX']) else False
     if adx_filter: score += 5
     
-    # 突破分數
     if 'BBW' in df.columns and last['BBW'] > df['BBW'].tail(60).quantile(0.85):
         if last['close'] > last['BB_Up']: score = 100 
         
@@ -209,27 +195,23 @@ def analyze_signals(df):
     prev = df.iloc[-2]
     signals = []
     
-    # ATR 波動風險提示
     if 'ATR_Avg' in df.columns and not pd.isna(last['ATR_Avg']):
         current_atr = last['ATR']
         avg_atr = last['ATR_Avg']
         if current_atr > avg_atr * 1.5: signals.append(f"🚨 **波動度過高**：風險放大，建議減小部位。")
         elif current_atr < avg_atr * 0.5: signals.append(f"😴 **波動度極低**：市場極度沉悶。")
 
-    # 整理突破訊號
     if 'BBW' in df.columns:
         bbw_avg = df['BBW'].tail(60).mean()
         if last['BBW'] < bbw_avg * 0.8: signals.append("🧘 **低波動整理**：布林通道收斂，等待大行情。")
         elif last['close'] > last['BB_Up'] and last['BBW'] > bbw_avg * 1.2: signals.append("🚀 **趨勢突破確立**：股價創高且布林通道開口放大。")
     
-    # 均線趨勢與金死叉
     if 'MA5' in df.columns and 'MA20' in df.columns:
         if last['MA5'] > last['MA20'] > last['MA60']: signals.append("🔥 **趨勢**：多頭排列")
         elif last['MA5'] < last['MA20'] < last['MA60']: signals.append("❄️ **趨勢**：空頭排列")
         if prev['MA5'] < prev['MA20'] and last['MA5'] > last['MA20']: signals.append("✨ **均線金叉**：5日穿月線")
         elif prev['MA5'] > prev['MA20'] and last['MA5'] < last['MA20']: signals.append("💀 **均線死叉**：5日破月線")
         
-    # ADX & OBV 整合
     if 'ADX' in df.columns and not pd.isna(last['ADX']):
         adx_val = last['ADX']
         if adx_val > 40: signals.append(f"🚀 **ADX極強 ({adx_val:.1f})**：趨勢爆發，動能最強。")
@@ -324,41 +306,63 @@ def calculate_fibonacci_multi(df):
 # ==========================================
 # 6. 潛力股掃描 (Market Screener)
 # ==========================================
-# 註：此函式刻意不使用 @st.cache_data 以便每次刷新都能重新計算
+@st.cache_data(ttl=600) # 快取 10 分鐘，避免頻繁請求
 def screen_for_breakouts():
+    
+    # === 步驟 1: 獲取當日高週轉率股票名單 (爬取 Goodinfo 列表) ===
+    # 注意：這裡使用外部網站 API，有被 IP 封鎖的風險。
+    url = "https://goodinfo.tw/tw/StockList.asp?RPT_TIME=今日&RPT_ITEM=TurnRate"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://goodinfo.tw/tw/StockList.asp',
+    }
+    
+    top_stocks = {}
+    try:
+        dfs = pd.read_html(url, header=0, encoding='utf-8', flavor='html5lib', attrs={'class': 'tbl-row-hover'})
+        if dfs:
+            # Goodinfo 週轉率表格通常是第一個
+            df_turnover = dfs[0].iloc[1:] # 移除第一個不必要的標題行
+            # 確保 '代號' 欄位存在
+            if '代號' in df_turnover.columns and '名稱' in df_turnover.columns:
+                # 提取前 20 檔高週轉率股票
+                for i in range(min(20, len(df_turnover))):
+                    code = str(df_turnover.iloc[i]['代號']).strip()
+                    name = str(df_turnover.iloc[i]['名稱']).strip()
+                    top_stocks[code] = name
+            
+    except Exception as e:
+        # 如果爬蟲失敗，退回一個預設的短名單 (避免系統崩潰)
+        st.warning(f"❌ 無法即時抓取當日高周轉率名單，系統將使用備用名單進行評分。錯誤: {e}")
+        top_stocks = {
+            "2330": "台積電", "3231": "緯創", "2382": "廣達", "2603": "長榮", "3034": "聯詠", "2454": "聯發科" 
+        }
+
+    # === 步驟 2: 對高週轉率股票進行 AI 突破評分 ===
     recommendations = []
     
-    # 遍歷熱門股名單
-    for code, name in HOT_STOCKS_LIST.items():
+    for code, name in top_stocks.items():
         try:
+            # 下載數據並計算指標
             df_temp, _ = get_stock_data_v3(code)
-            if df_temp.empty: continue
-            
-            # 確保指標已計算
-            df_temp = calculate_indicators(df_temp.tail(100)) # 只需近 100 筆資料
-            
-            if df_temp.empty or len(df_temp) < 2: continue
+            if df_temp.empty or len(df_temp) < 60: continue
+            df_temp = calculate_indicators(df_temp)
             
             last = df_temp.iloc[-1]
             prev = df_temp.iloc[-2]
             
             # 1. 核心條件：突破整理區間
-            #   - BBW 處於低波動區 (前幾日低於平均) 且 今日BBW擴張
-            bbw_avg = df_temp['BBW'].iloc[-60:-1].mean()
             bbw_low_quantile = df_temp['BBW'].iloc[-60:-1].quantile(0.25)
-            
             is_consolidating = df_temp['BBW'].iloc[-5:-1].mean() < bbw_low_quantile
             is_breaking_out = last['close'] > last['BB_Up'] and last['volume'] > last['VolMA5'] * 1.2
             
-            if is_consolidating and is_breaking_out:
-                # 2. 次要條件：動能確認 (KD金叉/MACD翻紅)
-                is_kd_golden_cross = last['K'] > last['D'] and prev['K'] < prev['D']
-                is_macd_turning_up = last['Hist'] > 0 and prev['Hist'] < 0
-                
-                # 3. 最終分數判斷
+            # 2. 額外條件：ADX 強勢確認
+            adx_strong_trend = last['ADX'] > 25
+            
+            if is_consolidating and is_breaking_out and adx_strong_trend:
                 score = calculate_score(df_temp)
                 
-                if score >= 90 and (is_kd_golden_cross or is_macd_turning_up):
+                if score >= 90:
                     recommendations.append({
                         "代碼": code,
                         "名稱": name,
@@ -368,7 +372,7 @@ def screen_for_breakouts():
                         "今日漲跌(%)": f"{(last['close'] / prev['close'] - 1) * 100:.2f}%"
                     })
             
-        except Exception as e:
+        except Exception:
             continue
             
     return recommendations
@@ -407,7 +411,7 @@ with col2:
 if not df.empty:
     df = calculate_indicators(df)
     
-    # 新增 Tab 4: 推薦選股
+    # 新增 Tab 4: 潛力選股
     tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "🚀 潛力選股"]) 
 
     with tab1:
@@ -519,8 +523,8 @@ if not df.empty:
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
 
     with tab4:
-        st.subheader("🚀 整理突破潛力股 (熱門名單掃描)")
-        st.caption("此列表僅針對預選的 12 檔熱門股進行掃描，找出今日剛發生『低波動突破』且動能強勁的標的。")
+        st.subheader("🚀 整理突破潛力股 (高周轉率掃描)")
+        st.caption("此列表對 **當日高周轉率** 的股票進行篩選，找出具備『低波動整理後，放量突破布林通道上軌』的潛力股。")
         
         # 執行掃描
         recommendations = screen_for_breakouts()
@@ -529,7 +533,6 @@ if not df.empty:
             reco_df = pd.DataFrame(recommendations)
             reco_df.set_index('代碼', inplace=True)
             
-            # 使用顏色高亮顯示分數
             st.dataframe(reco_df.style.background_gradient(subset=['分數'], cmap='YlGn', low=0.4, high=1.0).format({
                 "分數": "{:.0f}",
                 "收盤價": "{:,.2f}"
@@ -537,4 +540,4 @@ if not df.empty:
             
             st.success("✅ 偵測到符合整理突破模型的股票，請點擊代碼進一步分析！")
         else:
-            st.info("🔎 掃描完成：熱門名單中，今日無明顯符合『低波動突破』條件的股票。")
+            st.info("🔎 掃描完成：高周轉率名單中，今日無明顯符合『低波動突破』條件的股票。")
