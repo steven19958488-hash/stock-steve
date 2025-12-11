@@ -6,7 +6,7 @@ import time
 import requests
 from bs4 import BeautifulSoup
 import numpy as np
-# 這裡已移除 FinMind 相關的 import
+# FinMind 相關的 import 已移除
 
 # ==========================================
 # 1. 資料抓取函數 (技術面)
@@ -62,7 +62,7 @@ def get_stock_name(stock_code):
             title = soup.title.string
             if title and "(" in title: return title.split("(")[0].strip()
             return title
-    except: pass
+    except Exception: pass
     return code
 
 # ==========================================
@@ -223,7 +223,6 @@ with col1:
 
 # --- 這裡已經將 FinMind 相關的程式碼移除，確保應用程式可以啟動 ---
 try:
-    # 這裡的 valid_ticker 是為了正確導向外部連結
     df, valid_ticker = get_stock_data_v3(stock_code)
 except:
     st.error("系統忙碌中，請稍後再試")
@@ -343,13 +342,17 @@ if not df.empty:
             st.markdown("#### 🐢 長線 (240日)")
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
 
-    # Tab 4: 籌碼分析 (改為連結導向)
+    # Tab 4: 籌碼分析 (改為連結導向 - 移除 FinMind 程式碼)
     with tab4:
         st.subheader("💰 三大法人買賣超")
-        st.warning("⚠️ 由於 FinMind/Yahoo 等套件在雲端環境連線不穩定，為確保應用程式正常運作，此功能已改為連結導向。")
+        st.warning("⚠️ 由於雲端環境安裝第三方金融套件連線不穩定，此功能已改為「外部連結導向」，以確保應用程式可以啟動。")
         
-        if valid_ticker:
-            url_yahoo = f"https://tw.stock.yahoo.com/quote/{valid_ticker}/institutional-trading"
-            st.link_button("👉 前往 Yahoo 股市查看三大法人", url_yahoo)
-        else:
-            st.caption("請先輸入有效的股票代碼。")
+        c_link1, c_link2 = st.columns(2)
+        
+        with c_link1:
+            url_yahoo = f"https://tw.stock.yahoo.com/quote/{stock_code}/institutional-trading"
+            st.link_button("👉 前往 Yahoo 股市查看", url_yahoo)
+        
+        with c_link2:
+            url_goodinfo = f"https://goodinfo.tw/tw/ShowBuySaleChart.asp?STOCK_ID={stock_code}&CHT_CAT=DATE"
+            st.link_button("👉 前往 Goodinfo 查看 (含官股)", url_goodinfo)
