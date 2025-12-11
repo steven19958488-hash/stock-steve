@@ -8,74 +8,6 @@ from bs4 import BeautifulSoup
 import numpy as np
 
 # ==========================================
-# 0. 產業鏈知識庫 (Industry Knowledge Base)
-# ==========================================
-# 這裡內建台股最熱門產業的結構，確保能直接顯示中文資訊
-INDUSTRY_DB = {
-    # --- 半導體 (晶圓代工) ---
-    "2330": {
-        "產業": "半導體產業 (晶圓代工)",
-        "位置": "中游 - 晶圓製造",
-        "上游": "IP設計 (安謀, M31)、IC設計 (聯發科)、矽晶圓 (環球晶)、設備 (ASML, 應用材料)",
-        "中游": "★ 晶圓代工 (台積電, 聯電, 世界先進, 力積電)",
-        "下游": "IC封測 (日月光, 京元電)、終端應用 (手機, PC, AI伺服器)",
-        "競品": "三星 (Samsung), 英特爾 (Intel), 聯電 (2303)"
-    },
-    "2303": {"產業": "半導體 (晶圓代工)", "位置": "中游", "競品": "台積電, 世界先進, 中芯國際"},
-    
-    # --- IC 設計 ---
-    "2454": {
-        "產業": "半導體產業 (IC設計)",
-        "位置": "上游 - IC設計",
-        "上游": "矽智財 IP (安謀, 力旺)",
-        "中游": "★ IC設計 (聯發科, 瑞昱, 聯詠)",
-        "下游": "晶圓代工 (台積電)、封測 (日月光)",
-        "競品": "高通 (Qualcomm), 博通 (Broadcom)"
-    },
-    "3034": {"產業": "IC設計 (驅動IC)", "位置": "上游", "競品": "敦泰, 瑞鼎, 奇景光電"},
-
-    # --- AI 伺服器 / 組裝代工 ---
-    "2317": {
-        "產業": "電子組裝 / AI 伺服器",
-        "位置": "下游 - 組裝代工 (EMS)",
-        "上游": "晶片 (NVIDIA, AMD)、記憶體 (海力士)、被動元件 (國巨)、PCB (金像電)",
-        "中游": "零組件/散熱 (奇鋐, 雙鴻)、電源 (台達電)",
-        "下游": "★ 系統組裝 (鴻海, 廣達, 緯創, 技嘉)",
-        "競品": "立訊, 比亞迪電子, 廣達, 緯創"
-    },
-    "2382": {"產業": "電腦週邊 / AI 伺服器", "位置": "下游 - 組裝", "競品": "鴻海, 緯創, 英業達"},
-    "3231": {"產業": "電腦週邊 / AI 伺服器", "位置": "下游 - 組裝", "競品": "鴻海, 廣達, 技嘉"},
-    "2357": {"產業": "電腦品牌 / 板卡", "位置": "下游 - 品牌", "競品": "宏碁, 微星, 技嘉"},
-
-    # --- 航運 (貨櫃) ---
-    "2603": {
-        "產業": "航運業 (貨櫃航運)",
-        "位置": "中游 - 海上運輸",
-        "上游": "造船 (台船, 韓造船廠)、租賃、燃油",
-        "中游": "★ 貨櫃運輸 (長榮, 陽明, 萬海)",
-        "下游": "貨運承攬 (台驊投控)、物流業、終端客戶",
-        "競品": "馬士基 (Maersk), 地中海航運 (MSC), 陽明, 萬海"
-    },
-    "2609": {"產業": "航運業 (貨櫃)", "位置": "中游", "競品": "長榮, 萬海"},
-    "2615": {"產業": "航運業 (貨櫃)", "位置": "中游", "競品": "長榮, 陽明"},
-
-    # --- 金融 ---
-    "2881": {
-        "產業": "金融業 (金控)",
-        "位置": "綜合金融服務",
-        "上游": "存款戶、投資人、企業資金",
-        "中游": "★ 金融控股 (銀行, 壽險, 證券)",
-        "下游": "貸款戶、保戶、股票投資人",
-        "競品": "國泰金, 中信金, 兆豐金"
-    },
-    "2882": {"產業": "金融業 (金控)", "位置": "綜合金融", "競品": "富邦金, 中信金"},
-    
-    # --- ETF ---
-    "0050": {"產業": "ETF (指數股票型基金)", "位置": "市值型", "競品": "006208 (富邦台50)"},
-    "0056": {"產業": "ETF (高股息)", "位置": "高股息型", "競品": "00878, 00929, 00919"}
-}
-
-# ==========================================
 # 1. 資料抓取函數 (技術面)
 # ==========================================
 @st.cache_data(ttl=3600)
@@ -110,14 +42,12 @@ def get_stock_data_v3(stock_code):
 @st.cache_data(ttl=86400)
 def get_stock_name(stock_code):
     code = str(stock_code).strip()
-    # 這裡的 map 僅用於顯示名稱
-    stock_map = {k: v.get("產業", k) if isinstance(v, dict) else v for k, v in INDUSTRY_DB.items()}
-    # 補上一些不在產業庫但在熱門清單的名字
-    stock_map.update({
+    # 這裡保留一些熱門股名稱，加快顯示速度
+    stock_map = {
         "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2303": "聯電",
-        "2603": "長榮", "2881": "富邦金"
-    })
-    
+        "2603": "長榮", "2609": "陽明", "2615": "萬海", "2881": "富邦金",
+        "2882": "國泰金", "0050": "元大台灣50", "0056": "元大高股息"
+    }
     if code in stock_map: return stock_map[code]
     try:
         url = f"https://tw.stock.yahoo.com/quote/{code}"
@@ -170,7 +100,7 @@ def calculate_indicators(df):
         df['BBW'] = (df['BB_Up'] - df['BB_Low']) / df['BB_Mid']
         
         df['OBV'] = (np.sign(df['close'].diff()) * df['volume']).fillna(0).cumsum()
-        df['DX'] = (abs((df['high'] - df['high'].shift(1)) - (df['low'].shift(1) - df['low'])) / df['close']) * 100 # 簡易版ADX
+        df['DX'] = (abs((df['high'] - df['high'].shift(1)) - (df['low'].shift(1) - df['low'])) / df['close']) * 100
         df['ADX'] = df['DX'].ewm(span=14).mean()
         
         df['Vol_Shift1'] = df['volume'].shift(1)
@@ -190,6 +120,7 @@ def calculate_indicators(df):
 def calculate_score(df):
     score = 50 
     last = df.iloc[-1]
+    prev = df.iloc[-2]
     
     if last['close'] > last['MA20']: score += 10 
     if last['MA20'] > last['MA60']: score += 10
@@ -198,6 +129,7 @@ def calculate_score(df):
     if last['close'] < last['MA20']: score -= 10
     if last['MA20'] < last['MA60']: score -= 10
     if last['close'] < last['MA60']: score -= 10
+    if last['MA5'] < last['MA20']: score -= 10
     
     if last['MACD'] > 0: score += 5
     if last['Hist'] > 0: score += 5
@@ -315,7 +247,49 @@ def calculate_fibonacci_multi(df):
     return get_levels(20), get_levels(60), get_levels(240)
 
 # ==========================================
-# 5. 主程式介面
+# 5. 核心功能：財務數據 (新增)
+# ==========================================
+@st.cache_data(ttl=86400)
+def get_financial_data(stock_code):
+    try:
+        ticker = yf.Ticker(f"{stock_code}.TW")
+        
+        # 1. 抓取主要財務指標
+        info = ticker.info
+        metrics = {
+            "PE": info.get('trailingPE', 'N/A'),
+            "EPS": info.get('trailingEps', 'N/A'),
+            "Yield": f"{info.get('dividendYield', 0) * 100:.2f}%" if info.get('dividendYield') else "N/A",
+            "PB": info.get('priceToBook', 'N/A')
+        }
+        
+        # 2. 抓取季報 (營收與獲利)
+        # quarterly_financials 可能會有 "Total Revenue", "Net Income"
+        fin_stmt = ticker.quarterly_income_stmt.T # 轉置，讓日期當 Index
+        
+        # 整理圖表需要的 DataFrame
+        chart_df = pd.DataFrame()
+        
+        if not fin_stmt.empty:
+            # 嘗試找尋對應的欄位名稱 (Yahoo 的欄位名稱有時會變)
+            rev_col = [c for c in fin_stmt.columns if "Revenue" in str(c) or "Sales" in str(c)]
+            inc_col = [c for c in fin_stmt.columns if "Net Income" in str(c)]
+            
+            if rev_col and inc_col:
+                # 取最近 5 季
+                recent = fin_stmt.head(5).iloc[::-1] # 反轉順序，由舊到新
+                chart_df['Revenue'] = recent[rev_col[0]]
+                chart_df['Net Income'] = recent[inc_col[0]]
+                # 簡化日期格式
+                chart_df.index = chart_df.index.strftime('%Y-Q%q') 
+        
+        return metrics, chart_df
+        
+    except Exception as e:
+        return None, pd.DataFrame()
+
+# ==========================================
+# 6. 主程式介面
 # ==========================================
 st.set_page_config(page_title="股票技術分析儀表板", layout="wide")
 st.title("📈 股票技術分析儀表板")
@@ -335,27 +309,20 @@ except:
 
 with col2:
     if not df.empty:
-        # 嘗試從產業資料庫獲取名稱，如果沒有則用爬蟲
-        stock_name_display = INDUSTRY_DB.get(stock_code, {}).get("產業", get_stock_name(stock_code))
-        if "產業" in stock_name_display: # 如果是完整產業描述，只取前面的名字 (例如 "台積電")
-             # 這裡簡單處理，實際名稱可能要手動對應，或者直接用 get_stock_name
-             real_name = get_stock_name(stock_code)
-        else:
-             real_name = stock_name_display
-
+        name = get_stock_name(stock_code)
         last = df.iloc[-1]['close']
         prev = df.iloc[-2]['close']
         change = last - prev
         pct = (change / prev) * 100
-        st.metric(label=f"{real_name} ({stock_code})", value=f"{last:.2f}", delta=f"{change:.2f} ({pct:.2f}%)")
+        st.metric(label=f"{name} ({stock_code})", value=f"{last:.2f}", delta=f"{change:.2f} ({pct:.2f}%)")
     else:
         st.caption("請輸入代碼並按 Enter")
 
 if not df.empty:
     df = calculate_indicators(df)
     
-    # 修改 Tab 4 的標籤
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "🔗 產業鏈與競品"]) 
+    # 最終分頁配置
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "💰 營收與獲利"]) 
 
     with tab1:
         time_period = st.radio("範圍：", ["1個月", "3個月", "半年", "1年"], index=1, horizontal=True)
@@ -465,41 +432,37 @@ if not df.empty:
             st.markdown("#### 🐢 長線 (240日)")
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
 
-    with tab4: # 產業鏈知識頁
-        st.subheader("🔗 產業鏈與競品 (AI 知識庫)")
+    # 新增的 Tab 4: 營收與獲利 (財務基本面)
+    with tab4:
+        st.subheader(f"💰 {name} ({stock_code}) 營收與獲利概況")
         
-        # 1. 檢查是否有內建資料
-        industry_info = INDUSTRY_DB.get(stock_code)
+        # 抓取財務數據
+        metrics, fin_df = get_financial_data(stock_code)
         
-        if industry_info:
-            # 有資料，顯示詳細版
-            st.success(f"✅ 成功辨識：{industry_info['產業']}")
+        if metrics:
+            # 1. 顯示關鍵指標
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("本益比 (PE)", f"{metrics['PE']:.2f}" if isinstance(metrics['PE'], (int, float)) else "N/A")
+            m2.metric("每股盈餘 (EPS)", f"{metrics['EPS']:.2f}" if isinstance(metrics['EPS'], (int, float)) else "N/A")
+            m3.metric("殖利率 (Yield)", metrics['Yield'])
+            m4.metric("股價淨值比 (PB)", f"{metrics['PB']:.2f}" if isinstance(metrics['PB'], (int, float)) else "N/A")
             
-            c_pos, c_comp = st.columns(2)
-            with c_pos:
-                st.markdown("### 📍 產業位置")
-                st.markdown(f"**{industry_info['位置']}**")
-                
-                with st.expander("查看完整供應鏈", expanded=True):
-                    if "上游" in industry_info: st.markdown(f"**上游**：{industry_info['上游']}")
-                    if "中游" in industry_info: st.markdown(f"**中游**：{industry_info['中游']}")
-                    if "下游" in industry_info: st.markdown(f"**下游**：{industry_info['下游']}")
+            st.divider()
             
-            with c_comp:
-                st.markdown("### ⚔️ 主要競爭對手")
-                st.info(industry_info['競品'])
+            # 2. 顯示圖表 (如果有數據)
+            if not fin_df.empty:
+                st.markdown("#### 📊 近五季營收趨勢 (單位：元)")
+                st.bar_chart(fin_df['Revenue'])
                 
+                st.markdown("#### 💵 近五季稅後淨利 (單位：元)")
+                st.bar_chart(fin_df['Net Income'])
+            else:
+                st.info("尚無完整的季報數據，可能為新上市股票或 ETF。")
         else:
-            # 沒資料，顯示通用版 + 外部連結
-            st.info(f"此股票 ({stock_code}) 尚未收錄於內建知識庫，請參考下方連結。")
+            st.warning("無法獲取財務數據，請稍後重試。")
             
-            # 使用 yfinance 的 Sector 資料當作備用
-            profile = get_company_profile(stock_code)
-            if "Error" not in profile:
-                st.markdown(f"**YF 分類**：{profile['Sector_CN']} / {profile['Industry_EN']}")
-
         st.divider()
-        st.markdown("#### 🔎 進一步查詢")
+        st.markdown("#### 🔗 外部詳細財報連結")
         c_l1, c_l2 = st.columns(2)
         with c_l1:
             url_goodinfo = f"https://goodinfo.tw/tw/StockBzPerformance.asp?STOCK_ID={stock_code}"
