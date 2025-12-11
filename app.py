@@ -8,10 +8,12 @@ from bs4 import BeautifulSoup
 import numpy as np
 
 # ==========================================
-# 0. 常用變數/名單 (Market Watchlist)
+# 0. 常用變數/名單
 # ==========================================
-# 為了避免 IP 封鎖，這裡不再使用固定的 HOT_STOCKS_LIST，而是嘗試抓取當日高周轉率名單。
-# 如果抓取失敗，則退回一個預設的短名單。
+# 如果高周轉率抓取失敗，使用的備用短名單
+BACKUP_STOCKS = {
+    "2330": "台積電", "3231": "緯創", "2382": "廣達", "2603": "長榮", "3034": "聯詠", "2454": "聯發科" 
+}
 
 # ==========================================
 # 1. 資料抓取函數 (技術面)
@@ -45,7 +47,6 @@ def get_stock_data_v3(stock_code):
 # ==========================================
 # 2. 獲取公司名稱
 # ==========================================
-# (保持不變，略)
 @st.cache_data(ttl=86400)
 def get_stock_name(stock_code):
     code = str(stock_code).strip()
@@ -72,7 +73,7 @@ def get_stock_name(stock_code):
     return code
 
 # ==========================================
-# 3. 指標計算 (略)
+# 3. 指標計算
 # ==========================================
 def calculate_indicators(df):
     df = df.copy()
@@ -309,8 +310,7 @@ def calculate_fibonacci_multi(df):
 @st.cache_data(ttl=600) # 快取 10 分鐘，避免頻繁請求
 def screen_for_breakouts():
     
-    # === 步驟 1: 獲取當日高週轉率股票名單 (爬取 Goodinfo 列表) ===
-    # 注意：這裡使用外部網站 API，有被 IP 封鎖的風險。
+    # === 步驟 1: 獲取當日高週轉率股票名單 (修正編碼) ===
     url = "https://goodinfo.tw/tw/StockList.asp?RPT_TIME=今日&RPT_ITEM=TurnRate"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -319,24 +319,27 @@ def screen_for_breakouts():
     
     top_stocks = {}
     try:
-        dfs = pd.read_html(url, header=0, encoding='utf-8', flavor='html5lib', attrs={'class': 'tbl-row-hover'})
-        if dfs:
-            # Goodinfo 週轉率表格通常是第一個
-            df_turnover = dfs[0].iloc[1:] # 移除第一個不必要的標題行
-            # 確保 '代號' 欄位存在
-            if '代號' in df_turnover.columns and '名稱' in df_turnover.columns:
-                # 提取前 20 檔高週轉率股票
-                for i in range(min(20, len(df_turnover))):
-                    code = str(df_turnover.iloc[i]['代號']).strip()
-                    name = str(df_turnover.iloc[i]['名稱']).strip()
-                    top_stocks[code] = name
-            
+        # 使用 requests 確保編碼為 UTF-8
+        response = requests.get(url, headers=headers, timeout=10)
+        response.encoding = 'utf-8' # 關鍵修正：確保編碼
+        
+        # 使用 read_html 解析
+        dfs = pd.read_html(response.text, header=0, flavor='html5lib', attrs={'class': 'tbl-row-hover'})
+        
+        df_turnover = dfs[0].iloc[1:]
+        
+        if '代號' in df_turnover.columns and '名稱' in df_turnover.columns:
+            for i in range(min(20, len(df_turnover))):
+                code = str(df_turnover.iloc[i]['代號']).strip()
+                name = str(df_turnover.iloc[i]['名稱']).strip()
+                top_stocks[code] = name
+        
     except Exception as e:
-        # 如果爬蟲失敗，退回一個預設的短名單 (避免系統崩潰)
-        st.warning(f"❌ 無法即時抓取當日高周轉率名單，系統將使用備用名單進行評分。錯誤: {e}")
-        top_stocks = {
-            "2330": "台積電", "3231": "緯創", "2382": "廣達", "2603": "長榮", "3034": "聯詠", "2454": "聯發科" 
-        }
+        # 爬蟲失敗，使用備用短名單
+        top_stocks = BACKUP_STOCKS 
+        st.session_state['scan_error'] = f"❌ 無法即時抓取當日高周轉率名單，使用備用名單。錯誤: {e}"
+        # 移除快取，確保下次重試
+        st.cache_data.clear()
 
     # === 步驟 2: 對高週轉率股票進行 AI 突破評分 ===
     recommendations = []
@@ -349,7 +352,6 @@ def screen_for_breakouts():
             df_temp = calculate_indicators(df_temp)
             
             last = df_temp.iloc[-1]
-            prev = df_temp.iloc[-2]
             
             # 1. 核心條件：突破整理區間
             bbw_low_quantile = df_temp['BBW'].iloc[-60:-1].quantile(0.25)
@@ -369,7 +371,7 @@ def screen_for_breakouts():
                         "收盤價": f"{last['close']:.2f}",
                         "分數": score,
                         "策略": "突破整理區間 (買進)",
-                        "今日漲跌(%)": f"{(last['close'] / prev['close'] - 1) * 100:.2f}%"
+                        "今日漲跌(%)": f"{(last['close'] / df_temp.iloc[-2]['close'] - 1) * 100:.2f}%"
                     })
             
         except Exception:
@@ -411,7 +413,6 @@ with col2:
 if not df.empty:
     df = calculate_indicators(df)
     
-    # 新增 Tab 4: 潛力選股
     tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "🚀 潛力選股"]) 
 
     with tab1:
@@ -529,6 +530,11 @@ if not df.empty:
         # 執行掃描
         recommendations = screen_for_breakouts()
         
+        # 檢查是否有掃描錯誤 (來自 session_state)
+        if 'scan_error' in st.session_state and st.session_state.scan_error:
+            st.error(st.session_state.scan_error)
+            st.session_state.scan_error = None # 顯示後清除
+
         if recommendations:
             reco_df = pd.DataFrame(recommendations)
             reco_df.set_index('代碼', inplace=True)
