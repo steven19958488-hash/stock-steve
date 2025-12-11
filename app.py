@@ -8,7 +8,18 @@ from bs4 import BeautifulSoup
 import numpy as np
 
 # ==========================================
-# 1. 資料抓取函數 (技術面)
+# 0. 常用變數/名單 (Market Watchlist)
+# ==========================================
+# 使用短名單避免觸發Yahoo的下載限制
+HOT_STOCKS_LIST = {
+    "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2303": "聯電", 
+    "2382": "廣達", "3231": "緯創", "2603": "長榮", "2609": "陽明",
+    "2881": "富邦金", "2882": "國泰金", "0050": "元大台灣50", "0056": "元大高股息"
+}
+# 為了避免超限，我們只下載這 12 檔股票的數據用於推薦。
+
+# ==========================================
+# 1. 資料抓取函數
 # ==========================================
 @st.cache_data(ttl=3600)
 def get_stock_data_v3(stock_code):
@@ -70,7 +81,7 @@ def get_stock_name(stock_code):
 def calculate_indicators(df):
     df = df.copy()
     try:
-        # MA & Volume MA
+        # MA
         if len(df) >= 5: df['MA5'] = df['close'].rolling(5).mean()
         if len(df) >= 20: df['MA20'] = df['close'].rolling(20).mean()
         if len(df) >= 60: df['MA60'] = df['close'].rolling(60).mean()
@@ -116,7 +127,7 @@ def calculate_indicators(df):
         df['-DM_EMA'] = df['-DM'].ewm(span=n, adjust=False).mean()
         df['+DI'] = (df['+DM_EMA'] / df['ATR']) * 100
         df['-DI'] = (df['-DM_EMA'] / df['ATR']) * 100
-        df['DX'] = (abs(df['+DI'] - df['-DI']) / (df['+DI'] + df['+DI'])) * 100 # 修正分母
+        df['DX'] = (abs(df['+DI'] - df['-DI']) / (df['+DI'] + df['-DI'])) * 100
         df['ADX'] = df['DX'].ewm(span=n, adjust=False).mean()
         
         # 量能趨勢
@@ -125,41 +136,48 @@ def calculate_indicators(df):
         df['Vol_Inc'] = (df['volume'] > df['Vol_Shift1']) & (df['Vol_Shift1'] > df['Vol_Shift2'])
         df['Vol_Dec'] = (df['volume'] < df['Vol_Shift1']) & (df['Vol_Shift1'] < df['Vol_Shift2'])
         
-        # --- 新增：ATR 波動度 (近 20 日平均) ---
+        # ATR 波動度
         df['ATR_Avg'] = df['ATR'].tail(20).mean()
 
     except Exception as e:
-        print(f"指標計算錯誤: {e}")
         pass
     return df
 
 # ==========================================
-# 4. 策略與分析 (納入 ADX 濾鏡和 ATR 波動度)
+# 4. 策略與分析
 # ==========================================
 def calculate_score(df):
     score = 50 
     last = df.iloc[-1]
     prev = df.iloc[-2]
     
-    # 趨勢分數 (40%)
+    # 趨勢分數
     if last['close'] > last['MA20']: score += 10 
     if last['MA20'] > last['MA60']: score += 10
     if last['close'] > last['MA60']: score += 10
+    if last['MA5'] > last['MA20']: score += 10
+    if last['close'] < last['MA20']: score -= 10
+    if last['MA20'] < last['MA60']: score -= 10
+    if last['close'] < last['MA60']: score -= 10
+    if last['MA5'] < last['MA20']: score -= 10
     
-    # ADX 濾鏡：只在趨勢強烈時給予動能指標高加權
-    adx_filter = last['ADX'] > 25 if 'ADX' in df.columns and not pd.isna(last['ADX']) else True
+    # 動能分數
+    if last['MACD'] > 0: score += 5
+    if last['Hist'] > 0: score += 5
+    if last['K'] > last['D']: score += 5
+    if last['RSI'] > 80: score -= 5 
+    if last['RSI'] < 20: score += 5 
     
-    # 動能分數 (30%)
-    if last['MACD'] > 0 and adx_filter: score += 5
-    if last['Hist'] > 0 and adx_filter: score += 5
-    if last['K'] > last['D'] and adx_filter: score += 5
-    
-    # 量價分數 (20%)
+    # 量價分數
     vol_ratio = last['volume'] / last['VolMA5'] if 'VolMA5' in df.columns else 1
     if last['close'] > prev['close'] and vol_ratio > 1.2: score += 5 
     if last['close'] < prev['close'] and vol_ratio > 1.2: score -= 5 
     if 'Vol_Inc' in df.columns and last['Vol_Inc'] == True: score += 5
     if 'Vol_Dec' in df.columns and last['Vol_Dec'] == True: score -= 5 
+    
+    # ADX 趨勢確認
+    adx_filter = last['ADX'] > 25 if 'ADX' in df.columns and not pd.isna(last['ADX']) else False
+    if adx_filter: score += 5
     
     # 突破分數
     if 'BBW' in df.columns and last['BBW'] > df['BBW'].tail(60).quantile(0.85):
@@ -191,14 +209,12 @@ def analyze_signals(df):
     prev = df.iloc[-2]
     signals = []
     
-    # --- 新增：波動風險提示 ---
+    # ATR 波動風險提示
     if 'ATR_Avg' in df.columns and not pd.isna(last['ATR_Avg']):
         current_atr = last['ATR']
         avg_atr = last['ATR_Avg']
-        if current_atr > avg_atr * 1.5:
-             signals.append(f"🚨 **波動度過高**：ATR({current_atr:.2f})，風險放大，建議減小部位。")
-        elif current_atr < avg_atr * 0.5:
-             signals.append(f"😴 **波動度極低**：市場極度沉悶，不適合短線操作。")
+        if current_atr > avg_atr * 1.5: signals.append(f"🚨 **波動度過高**：風險放大，建議減小部位。")
+        elif current_atr < avg_atr * 0.5: signals.append(f"😴 **波動度極低**：市場極度沉悶。")
 
     # 整理突破訊號
     if 'BBW' in df.columns:
@@ -306,7 +322,60 @@ def calculate_fibonacci_multi(df):
     return get_levels(20), get_levels(60), get_levels(240)
 
 # ==========================================
-# 5. 主程式介面
+# 6. 潛力股掃描 (Market Screener)
+# ==========================================
+# 註：此函式刻意不使用 @st.cache_data 以便每次刷新都能重新計算
+def screen_for_breakouts():
+    recommendations = []
+    
+    # 遍歷熱門股名單
+    for code, name in HOT_STOCKS_LIST.items():
+        try:
+            df_temp, _ = get_stock_data_v3(code)
+            if df_temp.empty: continue
+            
+            # 確保指標已計算
+            df_temp = calculate_indicators(df_temp.tail(100)) # 只需近 100 筆資料
+            
+            if df_temp.empty or len(df_temp) < 2: continue
+            
+            last = df_temp.iloc[-1]
+            prev = df_temp.iloc[-2]
+            
+            # 1. 核心條件：突破整理區間
+            #   - BBW 處於低波動區 (前幾日低於平均) 且 今日BBW擴張
+            bbw_avg = df_temp['BBW'].iloc[-60:-1].mean()
+            bbw_low_quantile = df_temp['BBW'].iloc[-60:-1].quantile(0.25)
+            
+            is_consolidating = df_temp['BBW'].iloc[-5:-1].mean() < bbw_low_quantile
+            is_breaking_out = last['close'] > last['BB_Up'] and last['volume'] > last['VolMA5'] * 1.2
+            
+            if is_consolidating and is_breaking_out:
+                # 2. 次要條件：動能確認 (KD金叉/MACD翻紅)
+                is_kd_golden_cross = last['K'] > last['D'] and prev['K'] < prev['D']
+                is_macd_turning_up = last['Hist'] > 0 and prev['Hist'] < 0
+                
+                # 3. 最終分數判斷
+                score = calculate_score(df_temp)
+                
+                if score >= 90 and (is_kd_golden_cross or is_macd_turning_up):
+                    recommendations.append({
+                        "代碼": code,
+                        "名稱": name,
+                        "收盤價": f"{last['close']:.2f}",
+                        "分數": score,
+                        "策略": "突破整理區間 (買進)",
+                        "今日漲跌(%)": f"{(last['close'] / prev['close'] - 1) * 100:.2f}%"
+                    })
+            
+        except Exception as e:
+            continue
+            
+    return recommendations
+
+
+# ==========================================
+# 7. 主程式介面
 # ==========================================
 st.set_page_config(page_title="股票技術分析儀表板", layout="wide")
 st.title("📈 股票技術分析儀表板")
@@ -338,7 +407,8 @@ with col2:
 if not df.empty:
     df = calculate_indicators(df)
     
-    tab1, tab2, tab3 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割"]) 
+    # 新增 Tab 4: 推薦選股
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 K線圖", "💡 訊號診斷", "📐 黃金分割", "🚀 潛力選股"]) 
 
     with tab1:
         time_period = st.radio("範圍：", ["1個月", "3個月", "半年", "1年"], index=1, horizontal=True)
@@ -447,3 +517,24 @@ if not df.empty:
         with c3:
             st.markdown("#### 🐢 長線 (240日)")
             if l_fib: st.table(pd.DataFrame([{"位置":k, "價格":f"{v:.2f}"} for k,v in l_fib.items()]))
+
+    with tab4:
+        st.subheader("🚀 整理突破潛力股 (熱門名單掃描)")
+        st.caption("此列表僅針對預選的 12 檔熱門股進行掃描，找出今日剛發生『低波動突破』且動能強勁的標的。")
+        
+        # 執行掃描
+        recommendations = screen_for_breakouts()
+        
+        if recommendations:
+            reco_df = pd.DataFrame(recommendations)
+            reco_df.set_index('代碼', inplace=True)
+            
+            # 使用顏色高亮顯示分數
+            st.dataframe(reco_df.style.background_gradient(subset=['分數'], cmap='YlGn', low=0.4, high=1.0).format({
+                "分數": "{:.0f}",
+                "收盤價": "{:,.2f}"
+            }))
+            
+            st.success("✅ 偵測到符合整理突破模型的股票，請點擊代碼進一步分析！")
+        else:
+            st.info("🔎 掃描完成：熱門名單中，今日無明顯符合『低波動突破』條件的股票。")
